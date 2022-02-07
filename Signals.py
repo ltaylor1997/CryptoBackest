@@ -15,6 +15,9 @@ from sklearn.linear_model import LogisticRegression
 from sklearn import model_selection
 from sklearn.preprocessing import StandardScaler
 from sklearn.decomposition import PCA
+from xgboost import XGBClassifier
+from sklearn.utils import resample
+from sklearn import svm
 warnings.filterwarnings('ignore') 
 
 class strat():
@@ -36,20 +39,25 @@ class strat():
     def MACD(self, shortWindow = 12, longWindow = 26, back = False):
         
         #get the prices and only use close for ease of running
-        P = self.USDPrices['close']
+        P = self.USDPrices
         #calculate the MACD
-        MACD = talib.MACD(P ,shortWindow,longWindow)
+        #MACD = talib.MACD(P ,shortWindow,longWindow)
         #concatenate prices and MACD
-        P = pd.concat([P,MACD[0]],axis = 1)
+        P['12 day EWA'] = P['close'].ewm(span = 12).mean()
+        P['26 day EWA'] = P['close'].ewm(span = 26).mean()
+        P['MACD'] = P['12 day EWA'] - P['26 day EWA']
+        
+        #P = pd.concat([P,MACD[0]],axis = 1)
         #change the column names
-        P.columns = ['close','MACD']
+        #P.columns = ['close','MACD']
         #turn the MACD into simple buy sell signal
         P = P.fillna(0)
         P['MACDsignal'] = np.where(P['MACD'] > 0 , 1 , 0 )
         #return close prices, indicator, signal
         
-        backtest = self.metrics(P,'MACDsignal')
+        
         if back == True:
+            backtest = self.metrics(P,'MACDsignal')
             return P, backtest
         else:
             return P
@@ -58,18 +66,24 @@ class strat():
         #get the coin prices in USD
         P = self.USDPrices
         #get the coin to coin prices, i.e. ETH/BTC
-        S = self.coinPrices['close']
+        S = self.coinPrices
         #calculate the MACD
         #could use this for correlation or something different
         #open to change will program this later
-        MACD = talib.MACD(S)
+        S['close'] = S['close']/P['close']
+        S['12 day EWA'] = S['close'].ewm(span = 12).mean()
+        S['26 day EWA'] = S['close'].ewm(span = 26).mean()
+        S['Spread MACD'] = S['12 day EWA'] - S['26 day EWA']
+        P['Spread MACD'] = S['Spread MACD']
+        #MACD = talib.MACD(S)
         #turn the spread into a signal
-        P['Spread MACD'] = MACD[0]
-        P['SpreadSignal'] = np.where(MACD[0] > 0,1,0)
+        
+        P['SpreadSignal'] = np.where(S['Spread MACD'] > 0,1,0)
         #return prices, indicator, signal
-        backtest = self.metrics(P,'SpreadSignal')
+        
         P = P.fillna(0)
         if back == True:
+            backtest = self.metrics(P,'SpreadSignal')
             return P, backtest
         else:
             return P
@@ -78,20 +92,20 @@ class strat():
     def BBands(self,method = "touch",back = False):
         #get coin prices in USD
        P = self.USDPrices
+       P['MA'] = P['close'].rolling(20).mean()
+       P['std'] = P['MA'].rolling(20).std()
        #one std bands
        x1 = talib.BBANDS(P['close'], nbdevup = 1,nbdevdn =1)
-       #two std bands
-       x2 = talib.BBANDS(P['close'], nbdevup = 2,nbdevdn =2)
        #concat the bands into 1 df and change column names for each
        combine1 = pd.concat(x1,axis = 1)
        combine1.columns = ['upper1','middle1','lower1']
-       combine2 = pd.concat(x2,axis = 1)
-       combine2.columns = ['upper2','middle2','lower2']
+       
        #put it all together with prices
-       P = pd.concat([P,combine1,combine2],axis = 1)
+       P = pd.concat([P,combine1],axis = 1)
        #initialize the signal column
        P['BBandsSignal'] = np.zeros(len(P))
        #if the price touchs the top band, sell, and vice versa lower band
+       
        if method == "touch":
            #for loop, change it row by row if the close interacts with the band
            for i in range(len(P)):
@@ -107,10 +121,11 @@ class strat():
                    P['BBandsSignal'][i] = 1
                elif P['close'][i] <= P['upper1'][i]:
                    P['BBandsSignal'][i] = 0
-       backtest = self.metrics(P,'BBandsSignal')
+       
        P['bband%'] = (P['close'] - P['lower1'])/(P['upper1'] - P['lower1'])
        P = P.fillna(0)
        if back == True:
+            backtest = self.metrics(P,'BBandsSignal')
             return P, backtest
        else:
             return P
@@ -128,9 +143,10 @@ class strat():
             elif method == "reversion":
                 if P['Lag Returns'][i] < 0:
                     P['LagSignal'][i] = 1
-        backtest = self.metrics(P,'LagSignal')
+        
         
         if back == True:
+            backtest = self.metrics(P,'LagSignal')
             return P, backtest
         else:
             return P
@@ -141,26 +157,44 @@ class strat():
         P['true range'] = Trange.fillna(0)
         P['Trange signal'] = np.where(P['true range'] > P['true range'].shift(1),1,0)
         P['trange%'] = np.log(P['true range']/P['true range'].shift(1))
-        performance = self.metrics(P,'Trange signal')
+
         if back == True:
+            performance = self.metrics(P,'Trange signal')
             return P,performance
         elif back == False:
             return P
+    #def 3blackcrows(self):
+     #   P = self.USDPrices
+      #  P['3 crows'] = talib.CDL3BLACKCROWS(P['open'], P['high'], P['low'], P['close'])
+        
+    #def takuri(self):
+        #P = self.USDPrices
+        #P['takuri'] = talib.CDLTAKURI(P['open'], P['high'], P['low'], P['close'])
+        #P['tSignal'] = np.where(P['takuri'] > 0,1,np.where(P['takuri'].shift(1) >0,1,0))
+    #def 3sstars(self):
     
-    def metrics(self,strategy,name):
-        strategy['returns'] = np.log(strategy['close']/strategy['close'].shift(1))
-        strategy['FwdReturns'] = strategy['returns'].shift(-1)
+    def metrics(self,strategy,name,fwd = False):
+        if fwd == False:
+            strategy['returns'] = np.log(strategy['close']/strategy['close'].shift(1)) 
+            strategy['FwdReturns'] = strategy['returns'].shift(-1) 
+        else:
+            pass#- strategy['transaction']
+        strategy['transaction'] = np.where(strategy[name] == 0,0,np.where(strategy[name].shift(1) < 1,np.where(strategy[name].shift(-1) <1,.001,.0005 ),np.where(strategy[name].shift(-1) == 1,0,.0005)))
+        strategy['SFwdReturns'] = strategy['FwdReturns'] - strategy['transaction']
         df = strategy.fillna(0)
         r = df['FwdReturns'].values
+        rS = df['SFwdReturns']
         s = df[name].values
+        #s = np.where(s == 0,-1,1)
         rB = np.where(r> 0,1,0)
         accuracy = accuracy_score(rB, s)
-        strat_r = (r @ s)
+        strat_r = (rS @ s) #- sum(s) * .0032
         ones = np.ones(len(r))
         coin_r = (r @ ones)
         alpha = strat_r - coin_r
         stdR = r.std()
         r = np.array_split(r,10)
+        r = [x for x in r]
         ones = np.array_split(ones,10)
         
         s = np.array_split(s,10)
@@ -181,7 +215,8 @@ class strat():
 class stratCombine(strat):
     """
     Class to combine all of the simple strategies into one dataframe
-    Need to pass in the coin prics in USD and coin prices in another coin
+    Need to pass in the coin's prics in USD and coin's prices in another coin
+    Just like strat, it needs the colummns open, low, high, and close. 
     
     """
     #inherant the initializatino from parent class
@@ -193,7 +228,7 @@ class stratCombine(strat):
         puts all of the technical indicators together in one dataframe
         """
         #line to make sure there are no extra columns in the dataframe
-        df = self.USDPrices[['date','open','low','high','close','volume']]
+        df = self.USDPrices[['date','open','low','high','close']]
         #create all of the simple strategies
         #get both the binary and continous signals
         MACD = super(stratCombine,self).MACD()[['MACDsignal','MACD']]
@@ -214,8 +249,14 @@ class stratCombine(strat):
 
 
 class complexStrat(stratCombine):
+    """
+    This class uses for complex mathematical techniques to prdict price movements
+    Need to pass in the same dataframes as stratombine with the same column names
+    
+    """
     def __init__(self,USDPrices,coinPrices):
         super().__init__(USDPrices,coinPrices)
+
     def f_score(self,filterLevel = 3,back = False):
         """
         Sorting by technical indicators 
@@ -238,22 +279,35 @@ class complexStrat(stratCombine):
         #else, returns performance metrics and fataframe
         elif back == True:
             return signal,performance
-        
-    def logistic(self,binary = False,back = False):
-        """
-        returns dataframe of signals and indicators
-        back: controls if it returns backtest metrics or not
-        
-        """
-        #put the scaler and regression for ease of running
+    def modelFit(self,binary,mod,cv = False):
         scaler = StandardScaler()
-        model = LogisticRegression()
+        model = mod
         model2 = PCA(n_components = 4)
         #get the dataframe of all the indicators
         signal = super(complexStrat,self).signalCreateAll()
+        signal2 = super(complexStrat,self).signalCreateAll()
         # calculate returns and forward returns
-        signal['returns'] = np.log(signal['close']/signal['close'].shift(1))
-        signal['Fwd returns'] = signal['returns'].shift(-1)
+        signal2['returns'] = np.log(signal2['close']/signal2['close'].shift(1)) 
+        signal2['FwdReturns'] = signal2['returns'].shift(-1)
+        signal['returns'] = np.log(signal['close']/signal['close'].shift(1)) 
+        signal['FwdReturns'] = signal['returns'].shift(-1) - .0005
+        signal['binary'] = np.where(signal['FwdReturns'].fillna(0) > 0,1,0)
+        sig = sum(signal['binary'].values)
+        total = len(signal['binary'].values)
+        decider = sig/total
+        
+        if decider > .5:
+            up_majority = signal[signal['binary']==1]
+            
+            up_minority =signal[signal['binary']==0]
+        else:
+            up_majority = signal[signal['binary']==0]
+            
+            up_minority =signal[signal['binary']==1]
+        
+        #code to resample
+        up_upsampled = resample(up_minority,replace = True,n_samples = len(up_majority),random_state = 123)
+        signal = pd.concat([up_majority,up_upsampled])
         #get just the indicators for data running
         #if binary is true, only uses th signals, otherwise it is continuous
         if binary ==True:
@@ -263,25 +317,113 @@ class complexStrat(stratCombine):
             
             X = signal[['MACD','bband%','Spread MACD','Lag Returns' ]].fillna(0)
             #transform independent variables
+            X = X.astype(np.float32)
+            
             X = scaler.fit_transform(X)
+            
             X = model2.fit_transform(X)
             #get the y variable and make it binary
-        y = np.where(signal['Fwd returns'].fillna(0) > 0,1,0)
+        y = np.where(signal['FwdReturns'].fillna(0) > 0,1,0)
+    
         #split into training adn test data
-        X_train, X_test, y_train, y_test = model_selection.train_test_split( X, y.ravel(), test_size = 0.20, random_state = 7 )
+        X_train, X_test, y_train, y_test = model_selection.train_test_split( X, y.ravel(), test_size = 0.50, random_state = 7 )
         #fit the model and predict
         model.fit(X_train,y_train)
         #predict and turn into a signal
-        predictions = model.predict(X)
-        signal['logistic'] = predictions
-        #get performance metrics
-        performance = super(complexStrat,self).metrics(signal,'logistic')
+        X2 = signal2[['MACD','bband%','Spread MACD','Lag Returns' ]].fillna(0)
+        X2 = scaler.transform(X2)
+        X2 = model2.transform(X2)
+        predictions = model.predict(X2)
+        signal2['signal'] = predictions
+        y2 = np.where(signal2['FwdReturns'].fillna(0) > 0,1,0)
+        
+        if cv == True:
+            n_splits = 10
+            kfold = model_selection.KFold( n_splits , random_state = 7 )
+            cv_results = model_selection.cross_val_score( model, X2, y2.ravel(), cv = kfold, scoring = 'accuracy' )
+            return signal2, cv_results.mean() 
+        if cv == False:
+            return signal2
+    def returns(self,signal,back,cv):
+        if cv == True:
+            signal,cross = signal
+            
         #control whether metrics are returned
         if back == False:
             return signal
         elif back ==True:
-            return signal, performance
-    #def XGBoost(self):
+            performance = super(complexStrat,self).metrics(signal, 'signal',fwd = True)
+            if cv == True:
+                performance["CV"] = cross
+                return signal, performance
+            else:
+                return signal, performance
+    def logistic(self,binary = False,back = False,cv = False):
+        """
+        returns dataframe of signals and indicators
+        back: controls if it returns backtest metrics or not
+        
+        """
+        signal = self.modelFit(binary,LogisticRegression(),cv = cv)
+        
+        if cv == True:
+            signal,cross = signal
+            
+        #control whether metrics are returned
+        if back == False:
+            return signal
+        elif back ==True:
+            performance = super(complexStrat,self).metrics(signal, 'signal',fwd = True)
+            if cv == True:
+                performance["CV"] = cross
+                return signal, performance
+            else:
+                return signal, performance
         
         
-    
+        
+        
+        
+        
+        
+    def XGBoost(self,binary = False,back = False,cv = False):
+        signal = self.modelFit(binary,XGBClassifier(max_depth = 3),cv = cv)
+        #signal, cv = signal
+        #get performance metrics
+        if cv == True:
+            signal, cross = signal
+        #control whether metrics are returned
+        if back == False:
+            return signal
+        elif back ==True:
+            performance = super(complexStrat,self).metrics(signal, 'signal',fwd = True)
+            if cv == True:
+                performance["CV"] = cross
+                return signal, performance
+            else:
+                return signal, performance
+        
+    def SVM(self, binary = False,back = False, cv = False):
+        model = svm.SVC( kernel = 'rbf', C = 1, gamma = 10 )
+        
+        signal = self.modelFit(binary,model,cv )
+        
+        if cv == True:
+            signal, cross = signal
+        if back == False:
+            return signal
+        elif back ==True:
+            performance = super(complexStrat,self).metrics(signal,'signal')
+            if cv == True:
+                performance["CV"] = cross
+                return signal, performance
+            else:
+                return signal, performance
+        
+        
+        
+        
+        
+        
+        
+        
