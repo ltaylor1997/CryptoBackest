@@ -11,8 +11,7 @@ from ftx_client import ftx_client
 import pandas as pd
 import numpy as np
 
-a_key = "gA2WGArjoopJZQer66xnDQBo86-XCMXaAXdU6Lq3"
-s_key = "Be-cSCKlyQPVKcCbi5U9aQB85IbqStZUkFNc2eH-"
+
 
 ftx = ftx_client(a_key, s_key)
 class sort():
